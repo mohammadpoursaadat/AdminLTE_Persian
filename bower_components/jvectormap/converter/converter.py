@@ -81,7 +81,8 @@ class Converter:
     self.simplify_tolerance = args.get('simplify_tolerance')
     self.for_each = args.get('for_each')
     self.emulate_longitude0 = args.get('emulate_longitude0')
-    if args.get('emulate_longitude0') is None and (self.projection == 'merc' or self.projection =='mill') and self.longitude0 != 0:
+    if (args.get('emulate_longitude0') is None
+        and self.projection in ['merc', 'mill'] and self.longitude0 != 0):
       self.emulate_longitude0 = True
 
     if args.get('viewport'):
@@ -97,10 +98,7 @@ class Converter:
     self.spatialRef.ImportFromProj4(projString)
 
     # handle map insets
-    if args.get('insets'):
-      self.insets = args.get('insets')
-    else:
-      self.insets = []
+    self.insets = args.get('insets') or []
 
   def loadData(self):
     for sourceConfig in self.sources:
@@ -219,10 +217,7 @@ class Converter:
         converter.convert(childConfig['output_file'])
 
   def renderMapInset(self, codes, left, top, width):
-    envelope = []
-    for code in codes:
-      envelope.append( self.features[code]['geometry'].envelope )
-
+    envelope = [self.features[code]['geometry'].envelope for code in codes]
     bbox = shapely.geometry.MultiPolygon( envelope ).bounds
 
     scale = (bbox[2]-bbox[0]) / width
@@ -243,8 +238,7 @@ class Converter:
         polygons = [geometry]
       path = ''
       for polygon in polygons:
-        rings = []
-        rings.append(polygon.exterior)
+        rings = [polygon.exterior]
         rings.extend(polygon.interiors)
         for ring in rings:
           for pointIndex in range( len(ring.coords) ):

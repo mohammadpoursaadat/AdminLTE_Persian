@@ -87,7 +87,8 @@ class Converter:
     self.simplify_tolerance = args.get('simplify_tolerance')
     self.for_each = args.get('for_each')
     self.emulate_longitude0 = args.get('emulate_longitude0')
-    if args.get('emulate_longitude0') is None and (self.projection == 'merc' or self.projection =='mill') and self.longitude0 != 0:
+    if (args.get('emulate_longitude0') is None
+        and self.projection in ['merc', 'mill'] and self.longitude0 != 0):
       self.emulate_longitude0 = True
 
     if args.get('viewport'):
@@ -103,10 +104,7 @@ class Converter:
     self.spatialRef.ImportFromProj4(projString)
 
     # handle map insets
-    if args.get('insets'):
-      self.insets = args.get('insets')
-    else:
-      self.insets = []
+    self.insets = args.get('insets') or []
 
 
   def convert(self, data_source, output_file):
@@ -159,11 +157,8 @@ class Converter:
         converter.convert(childConfig['output_file'])
 
   def renderMapInset(self, data_source, codes, left, top, width):
-    envelope = []
     geometries = filter(lambda g: g.properties[self.config['code_field']] in codes, data_source.geometries)
-    for geometry in geometries:
-      envelope.append( geometry.geom.envelope )
-
+    envelope = [geometry.geom.envelope for geometry in geometries]
     bbox = shapely.geometry.MultiPolygon( envelope ).bounds
 
     scale = (bbox[2]-bbox[0]) / width
@@ -183,8 +178,7 @@ class Converter:
         polygons = [geom]
       path = ''
       for polygon in polygons:
-        rings = []
-        rings.append(polygon.exterior)
+        rings = [polygon.exterior]
         rings.extend(polygon.interiors)
         for ring in rings:
           for pointIndex in range( len(ring.coords) ):
@@ -266,9 +260,10 @@ class DataSource:
       geometry = shapely.wkb.loads( geometry.ExportToWkb() )
       if not geometry.is_valid:
         geometry = geometry.buffer(0)
-      properties = {}
-      for field in self.fields:
-        properties[field['name']] = feature.GetFieldAsString(field['name']).decode('utf-8')
+      properties = {
+          field['name']: feature.GetFieldAsString(field['name']).decode('utf-8')
+          for field in self.fields
+      }
       self.geometries.append( Geometry(geometry, properties) )
 
     self.layer.ResetReading()
@@ -350,24 +345,17 @@ class PolygonSimplifier:
     self.geometries = geometries
 
     connections = {}
-    counter = 0
     for geom in geometries:
-      counter += 1
       polygons = []
 
       if isinstance(geom, shapely.geometry.Polygon):
         polygons.append(geom)
       else:
-        for polygon in geom:
-          polygons.append(polygon)
-
+        polygons.extend(iter(geom))
       for polygon in polygons:
         if polygon.area > 0:
-          lines = []
-          lines.append(polygon.exterior)
-          for line in polygon.interiors:
-            lines.append(line)
-
+          lines = [polygon.exterior]
+          lines.extend(iter(polygon.interiors))
           for line in lines:
             for i in range(len(line.coords)-1):
               indexFrom = i
@@ -376,10 +364,10 @@ class PolygonSimplifier:
               pointTo = self.format % line.coords[indexTo]
               if pointFrom == pointTo:
                 continue
-              if not (pointFrom in connections):
+              if pointFrom not in connections:
                 connections[pointFrom] = {}
               connections[pointFrom][pointTo] = 1
-              if not (pointTo in connections):
+              if pointTo not in connections:
                 connections[pointTo] = {}
               connections[pointTo][pointFrom] = 1
     self.connections = connections
@@ -387,31 +375,30 @@ class PolygonSimplifier:
     self.pivotPoints = {}
 
   def simplifyRing(self, ring):
-    coords = list(ring.coords)[0:-1]
-    simpleCoords = []
-
+    coords = list(ring.coords)[:-1]
     isPivot = False
     pointIndex = 0
     while not isPivot and pointIndex < len(coords):
       pointStr = self.format % coords[pointIndex]
       pointIndex += 1
       isPivot = ((len(self.connections[pointStr]) > 2) or (pointStr in self.pivotPoints))
-    pointIndex = pointIndex - 1
+    pointIndex -= 1
 
     if not isPivot:
       simpleRing = shapely.geometry.LineString(coords).simplify(self.tolerance)
       if len(simpleRing.coords) <= 2:
         return None
-      else:
-        self.pivotPoints[self.format % coords[0]] = True
-        self.pivotPoints[self.format % coords[-1]] = True
-        simpleLineKey = self.format % coords[0]+':'+self.format % coords[1]+':'+self.format % coords[-1]
-        self.simplifiedLines[simpleLineKey] = simpleRing.coords
-        return simpleRing
+      self.pivotPoints[self.format % coords[0]] = True
+      self.pivotPoints[self.format % coords[-1]] = True
+      simpleLineKey = self.format % coords[0]+':'+self.format % coords[1]+':'+self.format % coords[-1]
+      self.simplifiedLines[simpleLineKey] = simpleRing.coords
+      return simpleRing
     else:
       points = coords[pointIndex:len(coords)]
-      points.extend(coords[0:pointIndex+1])
+      points.extend(coords[:pointIndex+1])
       iFrom = 0
+      simpleCoords = []
+
       for i in range(1, len(points)):
         pointStr = self.format % points[i]
         if ((len(self.connections[pointStr]) > 2) or (pointStr in self.pivotPoints)):
@@ -424,7 +411,7 @@ class PolygonSimplifier:
             simpleLine = shapely.geometry.LineString(line).simplify(self.tolerance).coords
             lineKey = self.format % line[0]+':'+self.format % line[1]+':'+self.format % line[-1]
             self.simplifiedLines[lineKey] = simpleLine
-          simpleCoords.extend( simpleLine[0:-1] )
+          simpleCoords.extend(simpleLine[:-1])
           iFrom = i
       if len(simpleCoords) <= 2:
         return None
@@ -451,15 +438,13 @@ class PolygonSimplifier:
       if isinstance(geom, shapely.geometry.Polygon):
         polygons.append(geom)
       else:
-        for polygon in geom:
-          polygons.append(polygon)
-
+        polygons.extend(iter(geom))
       for polygon in polygons:
         simplePolygon = self.simplifyPolygon(polygon)
-        if not (simplePolygon is None or simplePolygon._geom is None):
+        if simplePolygon is not None and simplePolygon._geom is not None:
           simplePolygons.append(simplePolygon)
 
-      if len(simplePolygons) > 0:
+      if simplePolygons:
         results.append(shapely.geometry.MultiPolygon(simplePolygons))
       else:
         results.append(None)
@@ -484,7 +469,6 @@ class Processor:
 
   def union(self, config, data_source):
     groups = {}
-    geometries = []
     for geometry in data_source.geometries:
       if geometry.properties[config['by']] in groups:
         groups[geometry.properties[config['by']]]['geoms'].append(geometry.geom)
@@ -493,8 +477,11 @@ class Processor:
           'geoms': [geometry.geom],
           'properties': geometry.properties
         }
-    for key in groups:
-      geometries.append( Geometry(shapely.ops.cascaded_union( groups[key]['geoms'] ), groups[key]['properties']) )
+    geometries = [
+        Geometry(
+            shapely.ops.cascaded_union(groups[key]['geoms']),
+            value['properties']) for key, value in groups.items()
+    ]
     data_source.geometries = geometries
 
   def merge(self, config, data_source):
